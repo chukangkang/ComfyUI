@@ -383,7 +383,38 @@ class RAMPressureCache(LRUCache):
 
     def poll(self, ram_headroom):
         def _ram_gb():
-            return psutil.virtual_memory().available / (1024**3)
+            """读取容器可用内存（GB），优先从 cgroup v2/v1 读取"""
+            # === 容器内存检测核心逻辑 ===
+            # 1. 尝试读取 cgroup v2 内存限制（Docker/K8s 主流）
+            cgroup_mem_limit_path = "/sys/fs/cgroup/memory.max"
+            cgroup_mem_usage_path = "/sys/fs/cgroup/memory.current"
+            
+            # 兼容 cgroup v1
+            if not os.path.exists(cgroup_mem_limit_path):
+                cgroup_mem_limit_path = "/sys/fs/cgroup/memory/memory.limit_in_bytes"
+                cgroup_mem_usage_path = "/sys/fs/cgroup/memory/memory.usage_in_bytes"
+
+            # 读取内存限制（字节）
+            try:
+                with open(cgroup_mem_limit_path, "r") as f:
+                    mem_limit = int(f.read().strip())
+                    # cgroup v1 中 limit_in_bytes 为 9223372036854771712 表示无限制， fallback 到系统内存
+                    if mem_limit == 9223372036854771712:
+                        mem_limit = psutil.virtual_memory().total
+            except (FileNotFoundError, ValueError):
+                mem_limit = psutil.virtual_memory().total
+
+            # 读取已使用内存（字节）
+            try:
+                with open(cgroup_mem_usage_path, "r") as f:
+                    mem_used = int(f.read().strip())
+            except (FileNotFoundError, ValueError):
+                mem_used = psutil.virtual_memory().total - psutil.virtual_memory().available
+
+            # 计算可用内存（GB）
+            mem_available = mem_limit - mem_used
+            return mem_available / (1024**3)
+        # === 替换结束 ===
 
         if _ram_gb() > ram_headroom:
             return

@@ -32,6 +32,26 @@ import comfy.memory_management
 import comfy.utils
 import comfy.quant_ops
 
+
+def get_container_ram_total():
+    cgroup_v2_limit = "/sys/fs/cgroup/memory.max"
+    cgroup_v1_limit = "/sys/fs/cgroup/memory/memory.limit_in_bytes"
+    try:
+        if os.path.exists(cgroup_v2_limit):
+            with open(cgroup_v2_limit, "r") as f:
+                limit = int(f.read().strip())
+        elif os.path.exists(cgroup_v1_limit):
+            with open(cgroup_v1_limit, "r") as f:
+                limit = int(f.read().strip())
+        else:
+            limit = psutil.virtual_memory().total
+        if limit == 9223372036854771712:
+            limit = psutil.virtual_memory().total
+        return limit
+    except:
+        return psutil.virtual_memory().total
+
+
 class VRAMState(Enum):
     DISABLED = 0    #No vram present: no need to move models to vram
     NO_VRAM = 1     #Very low vram: enable all the options to save vram
@@ -211,11 +231,13 @@ def get_total_memory(dev=None, torch_total_too=False):
         dev = get_torch_device()
 
     if hasattr(dev, 'type') and (dev.type == 'cpu' or dev.type == 'mps'):
-        mem_total = psutil.virtual_memory().total
+        # 核心修改：读取容器内存
+        mem_total = get_container_ram_total()
         mem_total_torch = mem_total
     else:
+        # GPU逻辑保持不变
         if directml_enabled:
-            mem_total = 1024 * 1024 * 1024 #TODO
+            mem_total = 1024 * 1024 * 1024
             mem_total_torch = mem_total
         elif is_intel_xpu():
             stats = torch.xpu.memory_stats(dev)
@@ -254,7 +276,7 @@ def mac_version():
         return None
 
 total_vram = get_total_memory(get_torch_device()) / (1024 * 1024)
-total_ram = psutil.virtual_memory().total / (1024 * 1024)
+total_ram = get_total_memory(torch.device("cpu")) / (1024 * 1024)
 logging.info("Total VRAM {:0.0f} MB, total RAM {:0.0f} MB".format(total_vram, total_ram))
 
 try:
