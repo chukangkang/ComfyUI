@@ -383,47 +383,47 @@ class RAMPressureCache(LRUCache):
         return super().get(node_id)
 
     def poll(self, ram_headroom):
-	def _ram_gb():
-		fallback_to_host_available = False
-		cgroup_mem_limit_path = "/sys/fs/cgroup/memory.max"
-		cgroup_mem_usage_path = "/sys/fs/cgroup/memory.current"
-		
-		if not os.path.exists(cgroup_mem_limit_path):
-			cgroup_mem_limit_path = "/sys/fs/cgroup/memory/memory.limit_in_bytes"
-			cgroup_mem_usage_path = "/sys/fs/cgroup/memory/memory.usage_in_bytes"
-	
-		try:
-			with open(cgroup_mem_limit_path, "r") as f:
-				raw_limit = f.read().strip()
-				if raw_limit == "max":
-					fallback_to_host_available = True
-					mem_limit = psutil.virtual_memory().total
-				else:
-					mem_limit = int(raw_limit)
-					if mem_limit == 9223372036854771712:
-						fallback_to_host_available = True
-						mem_limit = psutil.virtual_memory().total
-		except (FileNotFoundError, ValueError):
-			fallback_to_host_available = True
-			mem_limit = psutil.virtual_memory().total
-	
-		if fallback_to_host_available:
-			return psutil.virtual_memory().available / (1024**3)
-	
-		try:
-			with open(cgroup_mem_usage_path, "r") as f:
-				mem_used = int(f.read().strip())
-		except (FileNotFoundError, ValueError):
-			mem_used = psutil.virtual_memory().total - psutil.virtual_memory().available
-	
-		mem_available = max(0, mem_limit - mem_used)
-		return mem_available / (1024**3)
-	
-	if _ram_gb() > ram_headroom:
-		return
-	gc.collect()
-	if _ram_gb() > ram_headroom:
-		return
+        def _ram_gb():
+            fallback_to_host_available = False
+            cgroup_mem_limit_path = "/sys/fs/cgroup/memory.max"
+            cgroup_mem_usage_path = "/sys/fs/cgroup/memory.current"
+        
+            if not os.path.exists(cgroup_mem_limit_path):
+                cgroup_mem_limit_path = "/sys/fs/cgroup/memory/memory.limit_in_bytes"
+                cgroup_mem_usage_path = "/sys/fs/cgroup/memory/memory.usage_in_bytes"
+    
+            try:
+                with open(cgroup_mem_limit_path, "r") as f:
+                    raw_limit = f.read().strip()
+                    if raw_limit == "max":
+                        fallback_to_host_available = True
+                        mem_limit = psutil.virtual_memory().total
+                    else:
+                        mem_limit = int(raw_limit)
+                        if mem_limit == 9223372036854771712:
+                            fallback_to_host_available = True
+                            mem_limit = psutil.virtual_memory().total
+            except (FileNotFoundError, ValueError):
+                fallback_to_host_available = True
+                mem_limit = psutil.virtual_memory().total
+    
+            if fallback_to_host_available:
+                return psutil.virtual_memory().available / (1024**3)
+    
+            try:
+                with open(cgroup_mem_usage_path, "r") as f:
+                    mem_used = int(f.read().strip())
+            except (FileNotFoundError, ValueError):
+                mem_used = psutil.virtual_memory().total - psutil.virtual_memory().available
+    
+            mem_available = max(0, mem_limit - mem_used)
+            return mem_available / (1024**3)
+    
+        if _ram_gb() > ram_headroom:
+            return
+        gc.collect()
+        if _ram_gb() > ram_headroom:
+            return
 
         clean_list = []
 
