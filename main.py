@@ -17,6 +17,7 @@ from comfy_execution.progress import get_progress_state
 from comfy_execution.utils import get_executing_context
 from comfy_api import feature_flags
 from app.database.db import init_db, dependencies_available
+from update2XLYOss import XLYUploadImageToOssNode
 
 if __name__ == "__main__":
     #NOTE: These do not do anything on core ComfyUI, they are for custom nodes.
@@ -273,7 +274,13 @@ def prompt_worker(q, server_instance):
                             status_str='success' if e.success else 'error',
                             completed=e.success,
                             messages=e.status_messages), process_item=remove_sensitive)
+            try:
+                XLYUploadImageToOssNode().download_and_upload2_oss(item)
+            except Exception as exception:
+                logger.info(f"s上传oss发生异常: {exception}")
+
             if server_instance.client_id is not None:
+
                 server_instance.send_sync("executing", {"node": None, "prompt_id": prompt_id}, server_instance.client_id)
 
             current_time = time.perf_counter()

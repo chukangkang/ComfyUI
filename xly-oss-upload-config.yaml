@@ -1,0 +1,11 @@
+app:
+  xly_callback_result_host: "https://ng.xingluan.cn/xl-api/open/oss/getStsToken"
+  comfyuiServerUrl: "http://127.0.0.1:12800/api/"
+  ossEndpoint: "https://oss-cn-hangzhou.aliyuncs.com"
+logging:
+  level: "INFO"
+  format: '%(asctime)s [%(requestId)s] %(name)s - %(levelname)s - %(filename)s:%(lineno)d - %(message)s'
+  datefmt: '%Y-%m-%d %H:%M:%S'
+  file: 'logs/app.log'
+  max_bytes: 52428800
+  backup_count: 5
