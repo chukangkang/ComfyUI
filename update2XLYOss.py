@@ -16,9 +16,12 @@ from update2XLYOss import XLYUploadImageToOssNode
                             messages=e.status_messages), process_item=remove_sensitive)
 的后面添加入口
             try:
-                XLYUploadImageToOssNode().download_and_upload2_oss(item)
+                if len(item) > 3 and isinstance(item[3], dict):
+                    extra_data = item[3]
+                    if extra_data.get('xly_callback_result_host'):
+                        XLYUploadImageToOssNode().download_and_upload2_oss(item)
             except Exception as exception:
-                logger.info(f"测试过程发生异常: {exception}")
+                logging.exception("上传 OSS 失败")
 """
 
 """
@@ -44,8 +47,6 @@ def load_config():
 
 
 config = load_config()
-
-
 
 # ============ 配置项 ============
 STS_TOKEN_API_URL = config.get("app", {}).get("stsTokenApiUrl")
@@ -142,7 +143,7 @@ class XLYUploadImageToOssNode:
             return response.json()
         except Exception as e:
             logger.info(
-                    f"Warning: Failed to fetch history for {prompt_id}: {e}")
+                    f"Warning: Failed to fetch history for {prompt_id}: {e}：{response.text}")
             return {}
 
     def extract_comfy_data(self, item):
@@ -176,13 +177,14 @@ class XLYUploadImageToOssNode:
         outputs = target_result.get("outputs", {})
         node_id = None
         filename = None
+        subfolder = ""
 
-        for n_id, node_output in outputs.items():
-            images = node_output.get("images", [])
-            if images:
-                node_id = n_id
-                filename = images[0].get("filename")
-                break  # 找到第一个有图片的节点就退出
+        file_items = self.find_files_with_node(history_result)
+        for item in file_items:
+            print(item)
+            node_id = item["node_id"]
+            filename = item["filename"]
+            subfolder = item["subfolder"]
 
         # 3. 提取 status 中的 execution_start 和 execution_success 时间戳
         status = target_result.get("status", {})
@@ -208,15 +210,36 @@ class XLYUploadImageToOssNode:
             "env": env,
             "user_id": user_id,
             "request_id": request_id,
+            "subfolder": subfolder,
             "xly_callback_result_host": xly_callback_result_host,
             "xly_api_host": xly_api_host
         }
+
+    def find_files_with_node(self, history_result):
+        """从 history_result 中提取所有文件信息，同时记录 prompt_id 和 node_id"""
+        results = []
+        for prompt_id, prompt_data in history_result.items():
+            outputs = prompt_data.get("outputs", {})
+            for node_id, node_output in outputs.items():
+                # node_output 是类似 {"audio": [...]} 或 {"images": [...]} 的结构
+                for output_type, file_list in node_output.items():
+                    if isinstance(file_list, list):
+                        for item in file_list:
+                            if isinstance(item, dict) and "filename" in item and "subfolder" in item:
+                                results.append({
+                                    "prompt_id": prompt_id,
+                                    "node_id": node_id,
+                                    "output_type": output_type,  # "audio", "images" 等
+                                    "filename": item["filename"],
+                                    "subfolder": item["subfolder"],
+                                })
+        return results
 
     def report_task_result(self, task_id: str, oss_url: str = None,
             error_msg: str = None, request_id: str = "", node_id: str = "",
             execution_start: str = "0", execution_success: str = "0",
             data_source: str = "primary",
-            xly_callback_result_host: str="https://dbsave.xingluan.cn"):
+            xly_callback_result_host: str = "https://dbsave.xingluan.cn"):
         if oss_url:
             status = "completed"
             result_dict = {
@@ -279,6 +302,7 @@ class XLYUploadImageToOssNode:
         request_id = comfy_data.get("request_id")
         xly_api_host = comfy_data.get("xly_api_host")
         xly_callback_result_host = comfy_data.get("xly_callback_result_host")
+        subfolder = comfy_data.get("subfolder")
 
         set_thread_local(request_id)
 
@@ -305,7 +329,7 @@ class XLYUploadImageToOssNode:
             return None
         # --- 2. 构建 API URL 并获取图片流 ---
         # 根据要求使用地址：127.0.0.1:12800
-        view_url = f"{COMFYUI_IMAGE_SERVER_URL}view?filename={filename}&type=output&subfolder="
+        view_url = f"{COMFYUI_IMAGE_SERVER_URL}view?filename={filename}&type=output&subfolder={subfolder}"
 
         try:
             logger.info(f"正在从 ComfyUI 下载图片: {filename}...")

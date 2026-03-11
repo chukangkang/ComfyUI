@@ -275,9 +275,12 @@ def prompt_worker(q, server_instance):
                             completed=e.success,
                             messages=e.status_messages), process_item=remove_sensitive)
             try:
-                XLYUploadImageToOssNode().download_and_upload2_oss(item)
+                if len(item) > 3 and isinstance(item[3], dict):
+                    extra_data = item[3]
+                    if extra_data.get('xly_callback_result_host'):
+                        XLYUploadImageToOssNode().download_and_upload2_oss(item)
             except Exception as exception:
-                logger.info(f"s上传oss发生异常: {exception}")
+                logging.exception("上传 OSS 失败")
 
             if server_instance.client_id is not None:
 
