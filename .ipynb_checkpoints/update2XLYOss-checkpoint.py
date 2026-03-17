@@ -36,15 +36,13 @@ import oss2
 import requests
 import uuid
 import yaml
-import time
 
 # 导入自定义日志模块
 from mylogger import logger, set_thread_local
 
 
 def load_config():
-    with open('/root/ComfyUI/xly-oss-upload-config.yaml', 'r',
-              encoding='utf-8') as f:
+    with open('/root/ComfyUI/xly-oss-upload-config.yaml', 'r', encoding='utf-8') as f:
         return yaml.safe_load(f)
 
 
@@ -66,10 +64,8 @@ class XLYUploadImageToOssNode:
                 "user_id": ("STRING", {"default": "10001"}),
                 "prompt_id": ("STRING", {"default": "prompt_id001"}),
                 "request_id": ("STRING", {"default": "request_id_id001"}),
-                "xly_callback_result_host": ("STRING", {
-                    "default": "https://dbsave.xingluan.cn"}),
-                "xly_api_host": ("STRING",
-                                 {"default": "https://api.xingluan.cn"})
+                "xly_callback_result_host": ("STRING", {"default": "https://dbsave.xingluan.cn"}),
+                "xly_api_host": ("STRING", {"default": "https://api.xingluan.cn"})
             }
         }
 
@@ -79,8 +75,7 @@ class XLYUploadImageToOssNode:
     FUNCTION = "upload"
     CATEGORY = "XingLuan/OSS"
 
-    def upload_bytes(self, image_bytes, user_id, prompt_id, filename,
-            xly_api_host):
+    def upload_bytes(self, image_bytes, user_id, prompt_id, filename, xly_api_host):
         # =============================
         # 1️⃣ 获取 STS 临时凭证 (逻辑复用)
         # =============================
@@ -166,8 +161,7 @@ class XLYUploadImageToOssNode:
             env = extra_data.get('env')
             user_id = extra_data.get('user_id')
             request_id = extra_data.get('request_id')
-            xly_callback_result_host = extra_data.get(
-                    'xly_callback_result_host')
+            xly_callback_result_host = extra_data.get('xly_callback_result_host')
             xly_api_host = extra_data.get('xly_api_host')
 
         # 调用 history 接口获取数据
@@ -178,8 +172,19 @@ class XLYUploadImageToOssNode:
         if prompt_id and prompt_id in history_result:
             target_result = history_result[prompt_id]
 
+        # 2. 提取 e.result 中的 filename 和 node_id
+        # 遍历 outputs 寻找第一个包含图片的节点
+        outputs = target_result.get("outputs", {})
+        node_id = None
+        filename = None
+        subfolder = ""
+
         file_items = self.find_files_with_node(history_result)
-        logger.info(f"file_items: {file_items}")
+        for item in file_items:
+            print(item)
+            node_id = item["node_id"]
+            filename = item["filename"]
+            subfolder = item["subfolder"]
 
         # 3. 提取 status 中的 execution_start 和 execution_success 时间戳
         status = target_result.get("status", {})
@@ -197,13 +202,15 @@ class XLYUploadImageToOssNode:
                     execution_success = msg_data.get("timestamp")
 
         return {
-            "results": file_items,
+            "node_id": node_id,
+            "filename": filename,
             "execution_start": execution_start,
             "execution_success": execution_success,
             "prompt_id": prompt_id,
             "env": env,
             "user_id": user_id,
             "request_id": request_id,
+            "subfolder": subfolder,
             "xly_callback_result_host": xly_callback_result_host,
             "xly_api_host": xly_api_host
         }
@@ -218,40 +225,41 @@ class XLYUploadImageToOssNode:
                 for output_type, file_list in node_output.items():
                     if isinstance(file_list, list):
                         for item in file_list:
-                            if isinstance(item,
-                                          dict) and "filename" in item and "subfolder" in item:
+                            if isinstance(item, dict) and "filename" in item and "subfolder" in item:
                                 results.append({
-                                    "output_type": output_type,
-                                    # "audio", "images" 等
+                                    "prompt_id": prompt_id,
+                                    "node_id": node_id,
+                                    "output_type": output_type,  # "audio", "images" 等
                                     "filename": item["filename"],
                                     "subfolder": item["subfolder"],
                                 })
         return results
 
-    def report_task_result(self, task_id: str, results,
-            error_msg: str = None, request_id: str = "",
+    def report_task_result(self, task_id: str, oss_url: str = None,
+            error_msg: str = None, request_id: str = "", node_id: str = "",
             execution_start: str = "0", execution_success: str = "0",
             data_source: str = "primary",
             xly_callback_result_host: str = "https://dbsave.xingluan.cn"):
-        if results:
+        if oss_url:
             status = "completed"
             result_dict = {
                 "request_id": request_id,
-                "results": results,
+                "file_url": oss_url,
+                "node_id": node_id,
                 "start_timestamp": execution_start,
                 "end_timestamp": execution_success,
             }
-            result_json = json.dumps(result_dict)
+            result = json.dumps(result_dict)
             msg = ""
         else:
             status = "failed"
             result_dict = {
                 "request_id": request_id,
-                "results": results,
+                "node_id": node_id,
                 "start_timestamp": execution_start,
                 "end_timestamp": execution_success,
             }
-            result_json = json.dumps(result_dict)
+            result = json.dumps(result_dict)
             msg = error_msg or "未知错误"
 
         payload = {
@@ -259,49 +267,25 @@ class XLYUploadImageToOssNode:
             "tableName": "model_task",
             "modelTaskRequest": {
                 "taskId": task_id,
-                "result": result_json,
+                "result": result,
                 "status": status,
                 "msg": msg
             }
         }
-        logger.info(f"开始写库:taskId: {task_id}, {status}, result: {payload}")
-        max_retries = 100
-        total_wait_time = 0
-        max_total_wait = 300  # 5分钟 = 300秒
 
-        for attempt in range(1, max_retries + 1):
-            try:
-                req = requests.Request('POST',
-                                       xly_callback_result_host + "/dbsave/api/save/modelTask",
-                                       json=payload)
-                prepared = req.prepare()
-                logger.info(
-                        f"实际发出的 API 请求 Body: {prepared.body.decode('utf-8')}")
-                resp = requests.Session().send(prepared, timeout=10)
-                resp.raise_for_status()
-                logger.info(f"入库成功!")
-                break  # 成功则跳出循环
-            except requests.RequestException as e:
-                logger.error(f"入库失败 (尝试 {attempt}): {str(e)}")
-                if attempt >= max_retries:
-                    logger.error(f"入库最终失败: {str(e)}")
-                    # 可选：raise e 重新抛出异常
-                else:
-                    logger.error(f"入库失败delay {attempt}秒")
-                    # 指数退避：第一次1秒，第二次2秒，第三次4秒，以此类推
-                    wait_time = 2 ** (
-                                attempt - 1)  # attempt=1时 2^0=1, attempt=2时 2^1=2, attempt=3时 2^2=4
-                    total_wait_time += wait_time
+        try:
+            # 使用 PreparedRequest 打印出最终发出的 HTTP body
+            req = requests.Request('POST', xly_callback_result_host + "/dbsave/api/save/modelTask", json=payload)
+            prepared = req.prepare()
+            logger.info(
+                    f"实际发出的 API 请求 Body:{prepared.body.decode('utf-8')}")
 
-                    # 检查累计等待时间是否超过5分钟
-                    if total_wait_time >= max_total_wait:
-                        logger.error(
-                            f"累计等待时间已达{total_wait_time}秒，超过5分钟限制，停止重试")
-                        logger.error(f"入库最终失败: {str(e)}")
-                        break
-                    logger.error(
-                        f"入库失败，等待 {wait_time} 秒后重试 (累计等待: {total_wait_time}秒)")
-                    time.sleep(wait_time)
+            resp = requests.Session().send(prepared, timeout=10)
+            resp.raise_for_status()
+            logger.info(
+                    f"入库成功! 状态: {status}, taskId: {task_id},result: {result}")
+        except requests.RequestException as e:
+            logger.info(f"入库失败: {str(resp.text)}")
 
     def download_and_upload2_oss(self, item):
         """
@@ -312,12 +296,13 @@ class XLYUploadImageToOssNode:
         # --- 1. 获取 ComfyUI 数据 ---
         logger.info(f"download_and_upload2_oss:{item}")
         comfy_data = self.extract_comfy_data(item)
-
-        results = comfy_data.get("results")
+        filename = comfy_data.get("filename")
+        node_id = comfy_data.get("node_id")
         user_id = comfy_data.get("user_id")
         request_id = comfy_data.get("request_id")
         xly_api_host = comfy_data.get("xly_api_host")
         xly_callback_result_host = comfy_data.get("xly_callback_result_host")
+        subfolder = comfy_data.get("subfolder")
 
         set_thread_local(request_id)
 
@@ -328,58 +313,54 @@ class XLYUploadImageToOssNode:
         # 优先使用提取出的 prompt_id，如果没有则尝试 extra_info 中的 taskId，最后默认
         prompt_id = comfy_data.get("prompt_id")
 
-        final_results = []
-        try:
-            for item in results:
-                filename = item.get("filename")
-                if not filename:
-                    logger.info("错误: 未能在数据中提取到 filename")
-                    # 失败也记录一下库
-                    self.report_task_result(
-                            task_id=prompt_id,
-                            error_msg="未提取到文件名",
-                            request_id=request_id,
-                            execution_start=execution_start,
-                            execution_success=execution_success,
-                            data_source=env,
-                            xly_callback_result_host=xly_callback_result_host
-                    )
-                    break
-                # --- 2. 构建 API URL 并获取图片流 ---
-                # 根据要求使用地址：127.0.0.1:12800
-                view_url = f"{COMFYUI_IMAGE_SERVER_URL}view?filename={filename}&type=output&subfolder={item.get("subfolder")}"
-
-                logger.info(f"正在从 ComfyUI 下载图片: {filename}...")
-                resp = requests.get(view_url, timeout=15)
-                resp.raise_for_status()
-
-                oss_url_tuple = self.upload_bytes(resp.content, user_id,
-                                                  prompt_id,
-                                                  filename, xly_api_host)
-                # 在ComfyUI的规范中，自定义节点的FUNCTION（即你的upload方法）必须返回一个元组，即使里面只有一个值
-                if oss_url_tuple and isinstance(oss_url_tuple, tuple):
-                    final_url = oss_url_tuple[0]
-                    logger.info(f"✅ 上传完成，OSS URL: {final_url}")
-
-                    final_results.append({
-                        "output_type": item.get("output_type"),
-                        # "audio", "images" 等
-                        "url": final_url
-                    })
-
-                # --- 5. 写库操作 ---
-            logger.info(
-                    f"开始写入任务结果到数据库 (taskId: {prompt_id},final_results: {final_results})...")
-
+        if not filename:
+            logger.info("错误: 未能在数据中提取到 filename")
+            # 失败也记录一下库
             self.report_task_result(
                     task_id=prompt_id,
-                    results=final_results,
+                    error_msg="未提取到文件名",
                     request_id=request_id,
+                    node_id=node_id,
                     execution_start=execution_start,
                     execution_success=execution_success,
                     data_source=env,
                     xly_callback_result_host=xly_callback_result_host
             )
+            return None
+        # --- 2. 构建 API URL 并获取图片流 ---
+        # 根据要求使用地址：127.0.0.1:12800
+        view_url = f"{COMFYUI_IMAGE_SERVER_URL}view?filename={filename}&type=output&subfolder={subfolder}"
+
+        try:
+            logger.info(f"正在从 ComfyUI 下载图片: {filename}...")
+            resp = requests.get(view_url, timeout=15)
+            resp.raise_for_status()
+
+            oss_url_tuple = self.upload_bytes(resp.content, user_id, prompt_id,
+                                              filename, xly_api_host)
+            # 在ComfyUI的规范中，自定义节点的FUNCTION（即你的upload方法）必须返回一个元组，即使里面只有一个值
+            if oss_url_tuple and isinstance(oss_url_tuple, tuple):
+                final_url = oss_url_tuple[0]
+                logger.info(f"✅ 上传完成，OSS URL: {final_url}")
+
+                # --- 5. 写库操作 ---
+                logger.info(
+                        f"正在写入任务结果到数据库 (taskId: {prompt_id},ossurl: {final_url})...")
+
+                self.report_task_result(
+                        task_id=prompt_id,
+                        oss_url=final_url,
+                        request_id=request_id,
+                        node_id=node_id,
+                        execution_start=execution_start,
+                        execution_success=execution_success,
+                        data_source=env,
+                        xly_callback_result_host=xly_callback_result_host
+                )
+
+                return final_url
+
+            return None
         except Exception as e:
             error_msg = str(e)
             logger.info(f"❌ 处理过程中发生错误: {error_msg}")
@@ -389,10 +370,23 @@ class XLYUploadImageToOssNode:
                         task_id=prompt_id,
                         error_msg=error_msg,
                         request_id=request_id,
-                        results=final_results,
+                        node_id=node_id,
                         data_source=env,
                         xly_callback_result_host=xly_callback_result_host
                 )
             except:
                 pass
             return None
+
+
+# =============================
+# ComfyUI 注册
+# =============================
+
+NODE_CLASS_MAPPINGS = {
+    "XLYUploadImageToOssNode": XLYUploadImageToOssNode
+}
+
+NODE_DISPLAY_NAME_MAPPINGS = {
+    "XLYUploadImageToOssNode": "XingLuan Upload Image To OSS"
+}
